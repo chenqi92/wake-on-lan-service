@@ -49,7 +49,7 @@ docker run -d \
 
 ```bash
 # 下载 docker-compose.yml 文件
-curl -O https://raw.githubusercontent.com/kkape/wake-on-lan-service/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/chenqi92/wake-on-lan-service/master/docker-compose.yml
 
 # 启动服务
 docker-compose up -d
@@ -59,7 +59,7 @@ docker-compose up -d
 
 ```bash
 # 克隆仓库
-git clone <repository-url>
+git clone https://github.com/chenqi92/wake-on-lan-service.git
 cd wake-up
 
 # 构建并运行
@@ -285,8 +285,8 @@ MIT License
 
 如有问题，请通过以下方式联系:
 
-- 提交 GitHub Issue
-- 邮箱: [your-email@example.com]
+- 提交 [GitHub Issue](https://github.com/chenqi92/wake-on-lan-service/issues)
+- 邮箱: contact@kkape.com
 
 ---
 
