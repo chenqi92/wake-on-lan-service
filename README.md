@@ -155,6 +155,20 @@ curl -X POST "http://localhost:12345/wake/advanced" \
 
 Docker 会自动根据运行环境选择合适的镜像版本。
 
+#### 构建状态
+- ✅ **AMD64**: 已构建并推送
+- 🔄 **ARM64**: 通过GitHub Actions自动构建
+- 📦 **多平台manifest**: 自动创建统一镜像标签
+
+#### 验证多平台支持
+```bash
+# 检查镜像支持的平台
+docker manifest inspect kkape/wake-on-lan-service:latest
+
+# 测试不同架构
+docker run --rm kkape/wake-on-lan-service:latest python -c "import platform; print(f'架构: {platform.machine()}')"
+```
+
 ### 镜像特性
 
 - 基于 Python 3.11 slim 镜像
@@ -238,7 +252,17 @@ docker buildx create --name multiarch-builder --use --bootstrap
 
 #### 构建和推送
 
-1. **自动构建推送**：
+1. **GitHub Actions自动构建（推荐）**：
+```bash
+# 推送到master分支自动触发多平台构建
+git push origin master
+
+# 或创建标签触发版本构建
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+2. **本地构建脚本**：
 ```bash
 # Linux/Mac
 ./build_and_push.sh
@@ -247,17 +271,14 @@ docker buildx create --name multiarch-builder --use --bootstrap
 build_and_push.bat
 ```
 
-2. **手动构建推送**：
+3. **手动多平台构建**：
 ```bash
-# 登录Docker Hub
-docker login
-
-# 构建并推送多平台镜像
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t kkape/wake-on-lan-service:1.0.1 \
-  -t kkape/wake-on-lan-service:latest \
-  --push .
+# 使用多平台构建脚本
+./build_multiplatform_manual.sh  # Linux/Mac
+build_multiplatform_manual.bat   # Windows
 ```
+
+> **注意**: 完整的多平台支持需要GitHub Actions。本地环境可能无法构建ARM64镜像。
 
 #### 验证多平台镜像
 
