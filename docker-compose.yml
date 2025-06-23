@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  wake-on-lan:
+    build: .
+    container_name: wake-on-lan-service
+    ports:
+      - "12345:12345"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=12345
+    network_mode: host  # 使用主机网络模式以访问本地网络接口
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:12345/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wake-on-lan.rule=Host(`wake-on-lan.local`)"
+      - "traefik.http.services.wake-on-lan.loadbalancer.server.port=12345"
