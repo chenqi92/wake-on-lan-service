@@ -9,7 +9,7 @@ set -e
 # 配置变量
 DOCKER_USERNAME="kkape"
 IMAGE_NAME="wake-on-lan-service"
-VERSION="1.0.1"
+VERSION=$(cat VERSION)
 LATEST_TAG="latest"
 PLATFORMS="linux/amd64,linux/arm64"
 

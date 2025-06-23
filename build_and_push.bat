@@ -8,8 +8,10 @@ setlocal enabledelayedexpansion
 REM 配置变量
 set DOCKER_USERNAME=kkape
 set IMAGE_NAME=wake-on-lan-service
-set VERSION=1.0.1
 set LATEST_TAG=latest
+
+REM 读取版本文件
+set /p VERSION=<VERSION
 set PLATFORMS=linux/amd64,linux/arm64
 
 REM 完整镜像名称

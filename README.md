@@ -145,7 +145,7 @@ curl -X POST "http://localhost:12345/wake/advanced" \
 ### 镜像标签
 
 - `kkape/wake-on-lan-service:latest` - 最新版本
-- `kkape/wake-on-lan-service:1.0.1` - 指定版本
+- `kkape/wake-on-lan-service:1.0.1` - 当前版本（从VERSION文件读取）
 
 ### 多平台支持
 
@@ -190,23 +190,22 @@ docker run --rm kkape/wake-on-lan-service:latest python -c "import platform; pri
 
 ```
 wake-up/
-├── app/
+├── app/                          # 主应用代码
 │   ├── __init__.py              # 包初始化
-│   ├── main.py                  # FastAPI 应用主文件
+│   ├── main.py                  # FastAPI应用主文件（含Web界面）
 │   ├── models.py                # 数据模型定义
 │   ├── network_utils.py         # 网络工具函数
-│   └── wake_on_lan.py           # WOL 核心功能
-├── requirements.txt             # Python 依赖
-├── Dockerfile                   # Docker 镜像构建文件
-├── docker-compose.yml          # Docker 编排文件
-├── build_and_push.sh           # 多平台构建脚本 (Linux/Mac)
-├── build_and_push.bat          # 多平台构建脚本 (Windows)
-├── check_build_env.sh          # 构建环境检查 (Linux/Mac)
-├── check_build_env.bat         # 构建环境检查 (Windows)
-├── verify_multiplatform.sh     # 多平台镜像验证 (Linux/Mac)
-├── verify_multiplatform.bat    # 多平台镜像验证 (Windows)
-├── start_service.sh            # 快速启动脚本 (Linux/Mac)
-├── start_service.bat           # 快速启动脚本 (Windows)
+│   ├── wake_on_lan.py           # WOL核心功能
+│   └── static/                  # 静态文件目录
+├── .github/workflows/           # GitHub Actions工作流
+│   └── docker-build.yml        # 多平台Docker构建
+├── VERSION                      # 版本号文件
+├── Dockerfile                   # Docker镜像构建文件
+├── docker-compose.yml          # Docker编排文件
+├── requirements.txt             # Python依赖
+├── build_and_push.sh           # 构建脚本 (Linux/Mac)
+├── build_and_push.bat          # 构建脚本 (Windows)
+├── build_and_push_legacy.bat   # 传统构建脚本 (Windows)
 ├── test_service.py             # 功能测试套件
 ├── example_usage.py            # 使用示例脚本
 └── README.md                   # 项目文档
@@ -230,24 +229,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 12345
 
 ### 多平台Docker构建
 
-#### 环境准备
+#### 版本管理
 
-1. **检查构建环境**：
+项目使用 `VERSION` 文件管理版本号：
 ```bash
-# Linux/Mac
-./check_build_env.sh
+# 查看当前版本
+cat VERSION
 
-# Windows
-check_build_env.bat
-```
-
-2. **确保Docker Buildx可用**：
-```bash
-# 检查Buildx版本
-docker buildx version
-
-# 创建多平台构建器
-docker buildx create --name multiarch-builder --use --bootstrap
+# 更新版本（更新后重新构建镜像）
+echo "1.0.2" > VERSION
 ```
 
 #### 构建和推送
@@ -271,28 +261,17 @@ git push origin v1.0.1
 build_and_push.bat
 ```
 
-3. **手动多平台构建**：
-```bash
-# 使用多平台构建脚本
-./build_multiplatform_manual.sh  # Linux/Mac
-build_multiplatform_manual.bat   # Windows
-```
-
-> **注意**: 完整的多平台支持需要GitHub Actions。本地环境可能无法构建ARM64镜像。
-
 #### 验证多平台镜像
 
 ```bash
-# 使用验证脚本
-./verify_multiplatform.sh  # Linux/Mac
-verify_multiplatform.bat   # Windows
-
 # 手动验证
-docker buildx imagetools inspect kkape/wake-on-lan-service:latest
+docker manifest inspect kkape/wake-on-lan-service:latest
 
 # 测试不同平台
 docker run --rm kkape/wake-on-lan-service:latest python -c "import platform; print(f'架构: {platform.machine()}')"
 ```
+
+> **注意**: 完整的多平台支持通过GitHub Actions实现。本地环境可能无法构建ARM64镜像。
 
 ## 📄 许可证
 
@@ -312,5 +291,5 @@ MIT License
 ---
 
 **作者**: kkape  
-**版本**: 1.0.1
+**版本**: 从VERSION文件读取
 **更新时间**: 2025-06-23

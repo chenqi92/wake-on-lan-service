@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 import time
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from app.models import (
     WakeRequest, AdvancedWakeRequest, WakeResponse,
     InterfacesResponse, HealthResponse
@@ -15,11 +16,23 @@ from app.wake_on_lan import wake_device_simple, wake_device_advanced
 # 应用启动时间
 start_time = time.time()
 
+# 读取版本号
+def get_version():
+    try:
+        version_file = Path(__file__).parent.parent / "VERSION"
+        if version_file.exists():
+            return version_file.read_text().strip()
+        return "1.0.1"  # 默认版本
+    except:
+        return "1.0.1"  # 默认版本
+
+APP_VERSION = get_version()
+
 # 创建FastAPI应用
 app = FastAPI(
     title="Wake-on-LAN Service",
     description="内网设备唤醒服务 - 支持通过MAC地址唤醒网络设备",
-    version="1.0.1",
+    version=APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -40,7 +53,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.get("/", response_class=HTMLResponse, summary="Web界面", description="Wake-on-LAN Web管理界面")
 async def web_interface():
     """Web管理界面"""
-    return """
+    html_content = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -255,7 +268,7 @@ async def web_interface():
     <div class="container">
         <div class="header">
             <h1>🌐 Wake-on-LAN 管理界面</h1>
-            <p>内网设备远程唤醒服务 v1.0.1</p>
+            <p>内网设备远程唤醒服务 v""" + APP_VERSION + """</p>
         </div>
 
         <div class="content">
@@ -557,6 +570,7 @@ async def web_interface():
 </body>
 </html>
     """
+    return html_content
 
 
 @app.get("/api", summary="API信息", description="服务API信息，返回基本信息")
@@ -564,7 +578,7 @@ async def api_info():
     """根路径接口"""
     return {
         "service": "Wake-on-LAN Service",
-        "version": "1.0.1",
+        "version": APP_VERSION,
         "description": "内网设备唤醒服务",
         "docs": "/docs",
         "health": "/health"
@@ -579,7 +593,7 @@ async def health_check():
     
     return HealthResponse(
         status="healthy",
-        version="1.0.1",
+        version=APP_VERSION,
         uptime=uptime_str
     )
 

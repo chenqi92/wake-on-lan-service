@@ -10,8 +10,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 更新包列表（可选，因为我们不需要额外的系统依赖）
-# RUN apt-get update && rm -rf /var/lib/apt/lists/*
+# 安装构建依赖（ARM64需要gcc来编译psutil）
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
 COPY requirements.txt .

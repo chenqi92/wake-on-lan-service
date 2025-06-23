@@ -8,8 +8,10 @@ setlocal enabledelayedexpansion
 REM Configuration variables
 set DOCKER_USERNAME=kkape
 set IMAGE_NAME=wake-on-lan-service
-set VERSION=1.0.1
 set LATEST_TAG=latest
+
+REM Read version from file
+set /p VERSION=<VERSION
 
 REM Full image name
 set FULL_IMAGE_NAME=%DOCKER_USERNAME%/%IMAGE_NAME%
