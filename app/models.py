@@ -89,3 +89,52 @@ class UserInfo(BaseModel):
     """用户信息模型"""
     username: str = Field(..., description="用户名")
     is_authenticated: bool = Field(..., description="是否已认证")
+    auth_type: Optional[str] = Field(None, description="认证类型")
+    ip: Optional[str] = Field(None, description="客户端IP")
+
+
+# IP白名单相关模型
+class IPWhitelistItem(BaseModel):
+    """IP白名单项模型"""
+    ip: str = Field(..., description="IP地址或CIDR网段")
+    description: Optional[str] = Field(None, description="描述")
+    added_at: Optional[str] = Field(None, description="添加时间")
+
+
+class IPWhitelistResponse(BaseModel):
+    """IP白名单响应模型"""
+    whitelist: List[IPWhitelistItem] = Field(..., description="白名单列表")
+    count: int = Field(..., description="白名单数量")
+
+
+class AddIPRequest(BaseModel):
+    """添加IP请求模型"""
+    ip: str = Field(..., description="IP地址或CIDR网段")
+    description: Optional[str] = Field(None, description="描述")
+
+    @validator('ip')
+    def validate_ip(cls, v):
+        import ipaddress
+        try:
+            if '/' in v:
+                # CIDR网段
+                ipaddress.ip_network(v, strict=False)
+            else:
+                # 单个IP
+                ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            raise ValueError('无效的IP地址或CIDR网段格式')
+
+
+class RemoveIPRequest(BaseModel):
+    """移除IP请求模型"""
+    ip: str = Field(..., description="要移除的IP地址或CIDR网段")
+
+
+class IPWhitelistOperationResponse(BaseModel):
+    """IP白名单操作响应模型"""
+    success: bool = Field(..., description="操作是否成功")
+    message: str = Field(..., description="操作结果消息")
+    ip: Optional[str] = Field(None, description="操作的IP地址")
+    whitelist: Optional[List[str]] = Field(None, description="更新后的白名单")

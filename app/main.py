@@ -10,14 +10,18 @@ from pathlib import Path
 from app.models import (
     WakeRequest, AdvancedWakeRequest, WakeResponse,
     InterfacesResponse, HealthResponse,
-    LoginRequest, LoginResponse, CaptchaResponse, UserInfo
+    LoginRequest, LoginResponse, CaptchaResponse, UserInfo,
+    IPWhitelistResponse, IPWhitelistItem, AddIPRequest,
+    RemoveIPRequest, IPWhitelistOperationResponse
 )
 from app.network_utils import get_network_interfaces
 from app.wake_on_lan import wake_device_simple, wake_device_advanced
 from app.auth import (
-    auth_config, create_access_token, get_current_user,
+    auth_config, create_access_token, get_current_user, get_current_user_optional,
     generate_captcha, verify_captcha, cleanup_expired_captchas,
-    cleanup_expired_sessions
+    cleanup_expired_sessions, get_client_ip, is_ip_in_whitelist,
+    add_ip_to_whitelist, remove_ip_from_whitelist, get_ip_whitelist,
+    validate_ip_format
 )
 
 # 应用启动时间
@@ -171,7 +175,9 @@ async def get_user_info(current_user: dict = Depends(get_current_user)):
     """获取用户信息"""
     return UserInfo(
         username=current_user["username"],
-        is_authenticated=True
+        is_authenticated=True,
+        auth_type=current_user.get("auth_type"),
+        ip=current_user.get("ip")
     )
 
 
@@ -183,6 +189,104 @@ async def logout():
     cleanup_expired_captchas()
 
     return {"success": True, "message": "已退出登录"}
+
+
+# IP白名单管理API
+@app.get("/api/whitelist", response_model=IPWhitelistResponse, summary="获取IP白名单", description="获取当前IP白名单列表")
+async def get_whitelist(current_user: dict = Depends(get_current_user)):
+    """获取IP白名单列表"""
+    # 只有通过token认证的用户才能管理白名单
+    if current_user.get("auth_type") == "whitelist":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="白名单用户无法管理白名单"
+        )
+
+    try:
+        whitelist = get_ip_whitelist()
+        items = []
+        for ip in whitelist:
+            items.append(IPWhitelistItem(
+                ip=ip,
+                description=f"IP地址: {ip}",
+                added_at=datetime.utcnow().isoformat()
+            ))
+
+        return IPWhitelistResponse(
+            whitelist=items,
+            count=len(items)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取白名单失败: {str(e)}")
+
+
+@app.post("/api/whitelist/add", response_model=IPWhitelistOperationResponse, summary="添加IP到白名单", description="添加IP地址或CIDR网段到白名单")
+async def add_ip_whitelist(request: AddIPRequest, current_user: dict = Depends(get_current_user)):
+    """添加IP到白名单"""
+    # 只有通过token认证的用户才能管理白名单
+    if current_user.get("auth_type") == "whitelist":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="白名单用户无法管理白名单"
+        )
+
+    try:
+        if add_ip_to_whitelist(request.ip):
+            return IPWhitelistOperationResponse(
+                success=True,
+                message=f"成功添加IP {request.ip} 到白名单",
+                ip=request.ip,
+                whitelist=get_ip_whitelist()
+            )
+        else:
+            return IPWhitelistOperationResponse(
+                success=False,
+                message=f"添加IP {request.ip} 失败，可能是无效的IP格式",
+                ip=request.ip
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"添加IP到白名单失败: {str(e)}")
+
+
+@app.post("/api/whitelist/remove", response_model=IPWhitelistOperationResponse, summary="从白名单移除IP", description="从白名单中移除指定的IP地址或CIDR网段")
+async def remove_ip_whitelist(request: RemoveIPRequest, current_user: dict = Depends(get_current_user)):
+    """从白名单移除IP"""
+    # 只有通过token认证的用户才能管理白名单
+    if current_user.get("auth_type") == "whitelist":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="白名单用户无法管理白名单"
+        )
+
+    try:
+        if remove_ip_from_whitelist(request.ip):
+            return IPWhitelistOperationResponse(
+                success=True,
+                message=f"成功从白名单移除IP {request.ip}",
+                ip=request.ip,
+                whitelist=get_ip_whitelist()
+            )
+        else:
+            return IPWhitelistOperationResponse(
+                success=False,
+                message=f"移除IP {request.ip} 失败，IP不在白名单中",
+                ip=request.ip
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"从白名单移除IP失败: {str(e)}")
+
+
+@app.get("/api/whitelist/check", summary="检查IP白名单状态", description="检查当前客户端IP是否在白名单中")
+async def check_ip_whitelist(request: Request):
+    """检查IP白名单状态"""
+    client_ip = get_client_ip(request)
+    in_whitelist = is_ip_in_whitelist(client_ip)
+
+    return {
+        "client_ip": client_ip,
+        "in_whitelist": in_whitelist,
+        "message": "IP在白名单中，可免认证访问" if in_whitelist else "IP不在白名单中，需要登录认证"
+    }
 
 
 

@@ -5,8 +5,10 @@
 import os
 import secrets
 import hashlib
+import ipaddress
+import json
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Set
 from io import BytesIO
 import base64
 
@@ -35,22 +37,62 @@ captcha_store: Dict[str, Dict[str, Any]] = {}
 # 会话存储（生产环境建议使用Redis）
 session_store: Dict[str, Dict[str, Any]] = {}
 
+# IP白名单存储（生产环境建议使用数据库）
+ip_whitelist: Set[str] = set()
+
+# 白名单文件路径
+WHITELIST_FILE = "ip_whitelist.json"
+
 
 class AuthConfig:
     """认证配置类"""
-    
+
     def __init__(self):
         self.username = os.getenv("WOL_USERNAME", "admin")
         self.password = os.getenv("WOL_PASSWORD", "admin123")
         self.session_secret = os.getenv("WOL_SESSION_SECRET", "your-secret-key-change-this")
-        
+
         # 验证配置
         if self.session_secret == "your-secret-key-change-this":
             print("警告: 使用默认的会话密钥，生产环境请修改 WOL_SESSION_SECRET 环境变量")
-    
+
+        # 加载IP白名单
+        self.load_ip_whitelist()
+
     def verify_credentials(self, username: str, password: str) -> bool:
         """验证用户凭据"""
         return username == self.username and password == self.password
+
+    def load_ip_whitelist(self):
+        """从文件加载IP白名单"""
+        global ip_whitelist
+        try:
+            if os.path.exists(WHITELIST_FILE):
+                with open(WHITELIST_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    ip_whitelist = set(data.get('whitelist', []))
+                    print(f"已加载 {len(ip_whitelist)} 个白名单IP")
+            else:
+                # 创建默认白名单文件
+                default_whitelist = ['127.0.0.1', '::1']  # 本地回环地址
+                ip_whitelist = set(default_whitelist)
+                self.save_ip_whitelist()
+                print(f"创建默认白名单: {default_whitelist}")
+        except Exception as e:
+            print(f"加载IP白名单失败: {e}")
+            ip_whitelist = {'127.0.0.1', '::1'}  # 默认白名单
+
+    def save_ip_whitelist(self):
+        """保存IP白名单到文件"""
+        try:
+            data = {
+                'whitelist': list(ip_whitelist),
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            with open(WHITELIST_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"保存IP白名单失败: {e}")
 
 
 # 全局认证配置实例
@@ -209,24 +251,33 @@ async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Dict[str, Any]:
-    """获取当前用户（依赖注入）"""
-    
+    """获取当前用户（依赖注入）- 支持IP白名单免认证"""
+
+    # 检查IP是否在白名单中
+    client_ip = get_client_ip(request)
+    if is_ip_in_whitelist(client_ip):
+        return {
+            "username": "whitelist_user",
+            "ip": client_ip,
+            "auth_type": "whitelist"
+        }
+
     # 首先尝试从Authorization header获取token
     token = None
     if credentials:
         token = credentials.credentials
-    
+
     # 如果没有Authorization header，尝试从cookie获取
     if not token:
         token = request.cookies.get("access_token")
-    
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未提供访问令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # 验证token
     user_data = verify_token(token)
     if user_data is None:
@@ -235,8 +286,21 @@ async def get_current_user(
             detail="无效的访问令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    # 添加认证类型
+    user_data["auth_type"] = "token"
     return user_data
+
+
+async def get_current_user_optional(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Optional[Dict[str, Any]]:
+    """获取当前用户（可选）- 用于可选认证的端点"""
+    try:
+        return await get_current_user(request, credentials)
+    except HTTPException:
+        return None
 
 
 def create_session(username: str) -> str:
@@ -272,6 +336,99 @@ def cleanup_expired_sessions():
         session_id for session_id, session_data in session_store.items()
         if current_time > session_data["expires_at"]
     ]
-    
+
     for session_id in expired_ids:
         del session_store[session_id]
+
+
+# IP白名单管理函数
+def get_client_ip(request: Request) -> str:
+    """获取客户端真实IP地址"""
+    # 检查代理头
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For 可能包含多个IP，取第一个
+        return forwarded_for.split(",")[0].strip()
+
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # 使用客户端IP
+    return request.client.host if request.client else "unknown"
+
+
+def is_ip_in_whitelist(ip: str) -> bool:
+    """检查IP是否在白名单中"""
+    if not ip or ip == "unknown":
+        return False
+
+    try:
+        client_ip = ipaddress.ip_address(ip)
+
+        for whitelist_ip in ip_whitelist:
+            try:
+                # 支持单个IP和CIDR网段
+                if '/' in whitelist_ip:
+                    # CIDR网段
+                    network = ipaddress.ip_network(whitelist_ip, strict=False)
+                    if client_ip in network:
+                        return True
+                else:
+                    # 单个IP
+                    if client_ip == ipaddress.ip_address(whitelist_ip):
+                        return True
+            except ValueError:
+                # 无效的IP格式，跳过
+                continue
+
+        return False
+    except ValueError:
+        # 无效的客户端IP
+        return False
+
+
+def add_ip_to_whitelist(ip: str) -> bool:
+    """添加IP到白名单"""
+    try:
+        # 验证IP格式
+        if '/' in ip:
+            # CIDR网段
+            ipaddress.ip_network(ip, strict=False)
+        else:
+            # 单个IP
+            ipaddress.ip_address(ip)
+
+        ip_whitelist.add(ip)
+        auth_config.save_ip_whitelist()
+        return True
+    except ValueError:
+        return False
+
+
+def remove_ip_from_whitelist(ip: str) -> bool:
+    """从白名单移除IP"""
+    if ip in ip_whitelist:
+        ip_whitelist.remove(ip)
+        auth_config.save_ip_whitelist()
+        return True
+    return False
+
+
+def get_ip_whitelist() -> List[str]:
+    """获取IP白名单列表"""
+    return sorted(list(ip_whitelist))
+
+
+def validate_ip_format(ip: str) -> bool:
+    """验证IP格式是否正确"""
+    try:
+        if '/' in ip:
+            # CIDR网段
+            ipaddress.ip_network(ip, strict=False)
+        else:
+            # 单个IP
+            ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False

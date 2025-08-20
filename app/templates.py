@@ -612,6 +612,96 @@ def get_main_template(app_version: str) -> str:
         .status-offline {{
             background: #dc3545;
         }}
+
+        /* 白名单管理样式 */
+        .whitelist-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+
+        .whitelist-table th,
+        .whitelist-table td {{
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }}
+
+        .whitelist-table th {{
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+        }}
+
+        .whitelist-table tr:hover {{
+            background: #f8f9fa;
+        }}
+
+        .remove-btn {{
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }}
+
+        .remove-btn:hover {{
+            background: #c82333;
+            transform: translateY(-1px);
+        }}
+
+        .ip-status {{
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            display: inline-block;
+            margin-top: 10px;
+        }}
+
+        .ip-status.in-whitelist {{
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }}
+
+        .ip-status.not-in-whitelist {{
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }}
+
+        .empty-whitelist {{
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+        }}
+
+        .auth-type-badge {{
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-left: 8px;
+        }}
+
+        .auth-type-token {{
+            background: #d1ecf1;
+            color: #0c5460;
+        }}
+
+        .auth-type-whitelist {{
+            background: #d4edda;
+            color: #155724;
+        }}
     </style>
 </head>
 <body>
@@ -652,6 +742,52 @@ def get_main_template(app_version: str) -> str:
                     </div>
                 </div>
                 <button onclick="loadInterfaces()">刷新接口</button>
+            </div>
+
+            <!-- IP白名单管理 -->
+            <div class="section" id="whitelistSection">
+                <h2>🛡️ IP白名单管理</h2>
+                <p style="margin-bottom: 20px; color: #666;">白名单中的IP地址可以无需登录直接调用API接口</p>
+
+                <!-- 添加IP -->
+                <div class="grid" style="margin-bottom: 30px;">
+                    <div>
+                        <h3>添加IP到白名单</h3>
+                        <div class="form-group">
+                            <label for="newIp">IP地址或CIDR网段:</label>
+                            <input type="text" id="newIp" placeholder="例: 192.168.1.100 或 192.168.1.0/24">
+                        </div>
+                        <div class="form-group">
+                            <label for="ipDescription">描述 (可选):</label>
+                            <input type="text" id="ipDescription" placeholder="例: 办公室服务器">
+                        </div>
+                        <button onclick="addIpToWhitelist()">添加到白名单</button>
+                        <div id="addIpResult"></div>
+                    </div>
+
+                    <div>
+                        <h3>当前状态</h3>
+                        <div id="currentIpStatus">
+                            <div class="loading">
+                                <div class="spinner"></div>
+                                <p>正在检查当前IP状态...</p>
+                            </div>
+                        </div>
+                        <button onclick="checkCurrentIpStatus()">检查当前IP</button>
+                    </div>
+                </div>
+
+                <!-- 白名单列表 -->
+                <div>
+                    <h3>当前白名单</h3>
+                    <div id="whitelistTable">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <p>正在加载白名单...</p>
+                        </div>
+                    </div>
+                    <button onclick="loadWhitelist()">刷新白名单</button>
+                </div>
             </div>
 
             <!-- 设备唤醒 -->
@@ -709,6 +845,8 @@ def get_main_template(app_version: str) -> str:
             loadUserInfo();
             checkServiceStatus();
             loadInterfaces();
+            loadWhitelist();
+            checkCurrentIpStatus();
         }});
 
         // 获取认证头
@@ -733,8 +871,21 @@ def get_main_template(app_version: str) -> str:
 
                 if (response.ok) {{
                     const user = await response.json();
+                    let authBadge = '';
+                    if (user.auth_type === 'whitelist') {{
+                        authBadge = '<span class="auth-type-badge auth-type-whitelist">白名单用户</span>';
+                        // 隐藏白名单管理功能
+                        const whitelistSection = document.getElementById('whitelistSection');
+                        if (whitelistSection) {{
+                            whitelistSection.style.display = 'none';
+                        }}
+                    }} else if (user.auth_type === 'token') {{
+                        authBadge = '<span class="auth-type-badge auth-type-token">登录用户</span>';
+                    }}
+
                     document.getElementById('userInfo').innerHTML = `
-                        欢迎, ${{user.username}}
+                        欢迎, ${{user.username}} ${{authBadge}}
+                        ${{user.ip ? `<br><small>IP: ${{user.ip}}</small>` : ''}}
                     `;
                 }} else {{
                     // 认证失败，跳转到登录页
@@ -973,6 +1124,217 @@ def get_main_template(app_version: str) -> str:
         function isValidMac(mac) {{
             const macRegex = /^([0-9A-Fa-f]{{2}}[:-]){{5}}([0-9A-Fa-f]{{2}})$/;
             return macRegex.test(mac);
+        }}
+
+        // IP白名单管理函数
+        async function loadWhitelist() {{
+            const whitelistDiv = document.getElementById('whitelistTable');
+            whitelistDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在加载白名单...</p></div>';
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/whitelist`, {{
+                    headers: getAuthHeaders()
+                }});
+
+                if (response.ok) {{
+                    const data = await response.json();
+
+                    if (data.count === 0) {{
+                        whitelistDiv.innerHTML = `
+                            <div class="empty-whitelist">
+                                <p>暂无白名单IP</p>
+                                <small>添加IP地址到白名单后，这些IP可以无需登录直接调用API</small>
+                            </div>
+                        `;
+                    }} else {{
+                        let tableHtml = `
+                            <table class="whitelist-table">
+                                <thead>
+                                    <tr>
+                                        <th>IP地址/网段</th>
+                                        <th>描述</th>
+                                        <th>添加时间</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                        `;
+
+                        data.whitelist.forEach(item => {{
+                            tableHtml += `
+                                <tr>
+                                    <td><code>${{item.ip}}</code></td>
+                                    <td>${{item.description || '无描述'}}</td>
+                                    <td>${{new Date(item.added_at).toLocaleString()}}</td>
+                                    <td>
+                                        <button class="remove-btn" onclick="removeIpFromWhitelist('${{item.ip}}')">
+                                            移除
+                                        </button>
+                                    </td>
+                                </tr>
+                            `;
+                        }});
+
+                        tableHtml += '</tbody></table>';
+                        whitelistDiv.innerHTML = tableHtml;
+                    }}
+                }} else if (response.status === 403) {{
+                    whitelistDiv.innerHTML = `
+                        <div class="result error">
+                            <strong>权限不足</strong><br>
+                            白名单用户无法管理白名单，请使用管理员账号登录
+                        </div>
+                    `;
+                }} else {{
+                    whitelistDiv.innerHTML = `
+                        <div class="result error">
+                            <strong>加载白名单失败</strong><br>
+                            HTTP ${{response.status}}
+                        </div>
+                    `;
+                }}
+            }} catch (error) {{
+                whitelistDiv.innerHTML = `
+                    <div class="result error">
+                        <strong>加载白名单失败</strong><br>
+                        错误: ${{error.message}}
+                    </div>
+                `;
+            }}
+        }}
+
+        async function addIpToWhitelist() {{
+            const ip = document.getElementById('newIp').value.trim();
+            const description = document.getElementById('ipDescription').value.trim();
+            const resultDiv = document.getElementById('addIpResult');
+
+            if (!ip) {{
+                resultDiv.innerHTML = '<div class="result error">请输入IP地址或CIDR网段</div>';
+                return;
+            }}
+
+            resultDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在添加到白名单...</p></div>';
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/whitelist/add`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders()
+                    }},
+                    body: JSON.stringify({{
+                        ip: ip,
+                        description: description
+                    }})
+                }});
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {{
+                    resultDiv.innerHTML = `
+                        <div class="result success">
+                            <strong>✅ 添加成功!</strong><br>
+                            ${{data.message}}
+                        </div>
+                    `;
+
+                    // 清空输入框
+                    document.getElementById('newIp').value = '';
+                    document.getElementById('ipDescription').value = '';
+
+                    // 刷新白名单
+                    loadWhitelist();
+                    checkCurrentIpStatus();
+                }} else {{
+                    resultDiv.innerHTML = `
+                        <div class="result error">
+                            <strong>❌ 添加失败</strong><br>
+                            ${{data.message || '未知错误'}}
+                        </div>
+                    `;
+                }}
+            }} catch (error) {{
+                resultDiv.innerHTML = `
+                    <div class="result error">
+                        <strong>❌ 请求失败</strong><br>
+                        错误: ${{error.message}}
+                    </div>
+                `;
+            }}
+        }}
+
+        async function removeIpFromWhitelist(ip) {{
+            if (!confirm(`确定要从白名单中移除 ${{ip}} 吗？`)) {{
+                return;
+            }}
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/whitelist/remove`, {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders()
+                    }},
+                    body: JSON.stringify({{
+                        ip: ip
+                    }})
+                }});
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {{
+                    // 刷新白名单
+                    loadWhitelist();
+                    checkCurrentIpStatus();
+
+                    // 显示成功消息
+                    const resultDiv = document.getElementById('addIpResult');
+                    resultDiv.innerHTML = `
+                        <div class="result success">
+                            <strong>✅ 移除成功!</strong><br>
+                            已从白名单移除 ${{ip}}
+                        </div>
+                    `;
+
+                    // 3秒后清除消息
+                    setTimeout(() => {{
+                        resultDiv.innerHTML = '';
+                    }}, 3000);
+                }} else {{
+                    alert(`移除失败: ${{data.message || '未知错误'}}`);
+                }}
+            }} catch (error) {{
+                alert(`移除失败: ${{error.message}}`);
+            }}
+        }}
+
+        async function checkCurrentIpStatus() {{
+            const statusDiv = document.getElementById('currentIpStatus');
+            statusDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在检查当前IP状态...</p></div>';
+
+            try {{
+                const response = await fetch(`${{API_BASE}}/api/whitelist/check`);
+                const data = await response.json();
+
+                const statusClass = data.in_whitelist ? 'in-whitelist' : 'not-in-whitelist';
+                const statusIcon = data.in_whitelist ? '✅' : '❌';
+
+                statusDiv.innerHTML = `
+                    <div>
+                        <p><strong>当前IP:</strong> <code>${{data.client_ip}}</code></p>
+                        <div class="ip-status ${{statusClass}}">
+                            ${{statusIcon}} ${{data.message}}
+                        </div>
+                    </div>
+                `;
+            }} catch (error) {{
+                statusDiv.innerHTML = `
+                    <div class="result error">
+                        <strong>检查失败</strong><br>
+                        错误: ${{error.message}}
+                    </div>
+                `;
+            }}
         }}
     </script>
 </body>
