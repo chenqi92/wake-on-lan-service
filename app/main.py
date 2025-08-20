@@ -139,7 +139,7 @@ async def login_interface():
         from app.templates import get_login_template
         return get_login_template(APP_VERSION)
     except Exception as e:
-        # 简单的登录页面
+        # 简单的登录页面 - 安全版本
         return f"""
         <html>
         <head><title>Wake-on-LAN 登录</title></head>
@@ -147,8 +147,8 @@ async def login_interface():
             <h1>Wake-on-LAN 登录</h1>
             <p>模板加载失败: {str(e)}</p>
             <form method="post" action="/api/login">
-                <p>用户名: <input type="text" name="username" value="admin"></p>
-                <p>密码: <input type="password" name="password"></p>
+                <p>用户名: <input type="text" name="username" placeholder="请输入用户名" required></p>
+                <p>密码: <input type="password" name="password" placeholder="请输入密码" required></p>
                 <p><button type="submit">登录</button></p>
             </form>
         </body>

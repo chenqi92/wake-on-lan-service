@@ -10,6 +10,11 @@ import time
 import json
 import secrets
 import base64
+import random
+import string
+import socket
+import struct
+import ipaddress
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from io import BytesIO
@@ -44,6 +49,9 @@ sessions = {}
 
 # IP白名单存储
 ip_whitelist = {'127.0.0.1', '::1'}  # 默认包含本地回环地址
+
+# 验证码存储 {session_id: {'code': 'ABCD', 'expires': datetime, 'attempts': 0}}
+captcha_store = {}
 
 # Wake-on-LAN功能
 def send_magic_packet(mac_address: str, broadcast_ip: str = '255.255.255.255', port: int = 9):
@@ -154,6 +162,76 @@ def remove_ip_from_whitelist(ip: str) -> bool:
         ip_whitelist.remove(ip)
         return True
     return False
+
+# 验证码功能
+def generate_captcha_code() -> str:
+    """生成4位随机验证码"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+
+def create_captcha_image(code: str) -> str:
+    """创建验证码图片的SVG格式，返回base64编码"""
+    # 简单的SVG验证码
+    svg_content = f'''
+    <svg width="120" height="40" xmlns="http://www.w3.org/2000/svg">
+        <rect width="120" height="40" fill="#f0f0f0" stroke="#ccc"/>
+        <text x="60" y="25" font-family="Arial" font-size="18" font-weight="bold"
+              text-anchor="middle" fill="#333">{code}</text>
+        <!-- 添加一些干扰线 -->
+        <line x1="10" y1="15" x2="110" y2="25" stroke="#999" stroke-width="1"/>
+        <line x1="20" y1="30" x2="100" y2="10" stroke="#999" stroke-width="1"/>
+    </svg>
+    '''
+    # 转换为base64
+    svg_bytes = svg_content.encode('utf-8')
+    svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
+    return f"data:image/svg+xml;base64,{svg_base64}"
+
+def create_captcha_session() -> tuple[str, str]:
+    """创建验证码会话，返回(session_id, image_data_url)"""
+    session_id = secrets.token_urlsafe(16)
+    code = generate_captcha_code()
+
+    captcha_store[session_id] = {
+        'code': code,
+        'expires': datetime.utcnow() + timedelta(minutes=5),
+        'attempts': 0
+    }
+
+    image_data = create_captcha_image(code)
+    return session_id, image_data
+
+def verify_captcha(session_id: str, user_input: str) -> bool:
+    """验证验证码"""
+    if session_id not in captcha_store:
+        return False
+
+    captcha_data = captcha_store[session_id]
+
+    # 检查是否过期
+    if datetime.utcnow() > captcha_data['expires']:
+        del captcha_store[session_id]
+        return False
+
+    # 检查尝试次数
+    if captcha_data['attempts'] >= 3:
+        del captcha_store[session_id]
+        return False
+
+    # 验证码码
+    captcha_data['attempts'] += 1
+
+    if user_input.upper() == captcha_data['code']:
+        del captcha_store[session_id]  # 验证成功后删除
+        return True
+
+    return False
+
+def cleanup_expired_captchas():
+    """清理过期的验证码"""
+    now = datetime.utcnow()
+    expired_keys = [k for k, v in captcha_store.items() if now > v['expires']]
+    for key in expired_keys:
+        del captcha_store[key]
 
 def create_session(username: str) -> str:
     """创建会话"""
@@ -302,26 +380,39 @@ LOGIN_PAGE = """<!DOCTYPE html>
         </div>
 
         {error_message}
-        
-        <div class="info">
-            <strong>默认账号:</strong><br>
-            用户名: {username}<br>
-            密码: {password}
-        </div>
 
         <form method="post" action="/login">
             <div class="form-group">
                 <label>用户名:</label>
-                <input type="text" name="username" required value="{username}">
+                <input type="text" name="username" required placeholder="请输入用户名">
             </div>
 
             <div class="form-group">
                 <label>密码:</label>
-                <input type="password" name="password" required>
+                <input type="password" name="password" required placeholder="请输入密码">
             </div>
 
+            <div class="form-group">
+                <label>验证码:</label>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <input type="text" name="captcha" required placeholder="请输入验证码"
+                           style="flex: 1;" maxlength="4">
+                    <img src="{captcha_image}" alt="验证码"
+                         style="border: 1px solid #ddd; border-radius: 4px; cursor: pointer;"
+                         onclick="refreshCaptcha()" title="点击刷新验证码">
+                </div>
+                <small style="color: #666; font-size: 0.9em;">点击图片刷新验证码</small>
+            </div>
+
+            <input type="hidden" name="captcha_session" value="{captcha_session}">
             <button type="submit" class="login-button">登录</button>
         </form>
+
+        <script>
+            function refreshCaptcha() {{
+                window.location.reload();
+            }}
+        </script>
     </div>
 </body>
 </html>"""
@@ -1326,6 +1417,9 @@ MAIN_PAGE = """<!DOCTYPE html>
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     """首页"""
+    # 清理过期验证码
+    cleanup_expired_captchas()
+
     session_id = request.cookies.get("session_id")
     session_data = verify_session(session_id) if session_id else None
 
@@ -1335,30 +1429,50 @@ async def root(request: Request):
             username=session_data["username"]
         )
     else:
+        # 生成验证码
+        captcha_session, captcha_image = create_captcha_session()
         return LOGIN_PAGE.format(
-            username=os.getenv("WOL_USERNAME", "admin"),
-            password=os.getenv("WOL_PASSWORD", "admin123"),
+            captcha_session=captcha_session,
+            captcha_image=captcha_image,
             error_message=""
         )
 
 @app.post("/login", response_class=HTMLResponse)
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    """登录处理"""
+async def login(request: Request, username: str = Form(...), password: str = Form(...),
+                captcha: str = Form(...), captcha_session: str = Form(...)):
+    """登录处理 - 包含验证码验证和后台密码校验"""
+
+    def create_error_response(error_msg: str):
+        """创建错误响应"""
+        captcha_session_new, captcha_image_new = create_captcha_session()
+        error_html = f'<div class="error"><strong>登录失败:</strong> {error_msg}</div>'
+        return LOGIN_PAGE.format(
+            captcha_session=captcha_session_new,
+            captcha_image=captcha_image_new,
+            error_message=error_html
+        )
+
+    # 1. 验证码验证
+    if not verify_captcha(captcha_session, captcha):
+        return create_error_response("验证码错误或已过期")
+
+    # 2. 后台用户名密码校验
     expected_username = os.getenv("WOL_USERNAME", "admin")
     expected_password = os.getenv("WOL_PASSWORD", "admin123")
 
-    if username == expected_username and password == expected_password:
+    # 防止时序攻击的安全比较
+    username_valid = secrets.compare_digest(username.encode(), expected_username.encode())
+    password_valid = secrets.compare_digest(password.encode(), expected_password.encode())
+
+    if username_valid and password_valid:
+        # 登录成功
         session_id = create_session(username)
         response = RedirectResponse(url="/", status_code=302)
-        response.set_cookie("session_id", session_id, max_age=3600, httponly=True)
+        response.set_cookie("session_id", session_id, max_age=3600, httponly=True, secure=False)
         return response
     else:
-        error_html = '<div class="error"><strong>登录失败:</strong> 用户名或密码错误</div>'
-        return LOGIN_PAGE.format(
-            username=username,
-            password="",
-            error_message=error_html
-        )
+        # 登录失败 - 不透露具体是用户名还是密码错误
+        return create_error_response("用户名或密码错误")
 
 @app.get("/logout")
 async def logout(request: Request):
@@ -1370,6 +1484,16 @@ async def logout(request: Request):
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("session_id")
     return response
+
+@app.get("/captcha/refresh")
+async def refresh_captcha():
+    """刷新验证码"""
+    cleanup_expired_captchas()
+    captcha_session, captcha_image = create_captcha_session()
+    return {
+        "captcha_session": captcha_session,
+        "captcha_image": captcha_image
+    }
 
 @app.get("/health")
 async def health():
