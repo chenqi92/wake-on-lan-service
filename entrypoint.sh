@@ -50,36 +50,44 @@ fi
 # 启动应用前的最后检查
 echo "验证应用模块..."
 
-# 按优先级尝试不同的应用版本
-APP_MODULE="app.main_deploy:app"
+# 按优先级尝试不同的应用版本 - 优先使用功能完整的版本
+APP_MODULE="standalone_app_v2:app"
 
-echo "尝试部署版本应用..."
-if python -c "from app.main_deploy import app; print('✓ 部署版本应用加载成功')" 2>/dev/null; then
-    echo "✓ 部署版本应用验证通过"
-    APP_MODULE="app.main_deploy:app"
-elif [ -f "/app/standalone_app_v2.py" ]; then
-    echo "尝试现代化应用..."
+if [ -f "/app/standalone_app_v2.py" ]; then
+    echo "尝试现代化应用（完整功能版本）..."
     if python -c "from standalone_app_v2 import app; print('✓ 现代化应用加载成功')" 2>/dev/null; then
-        echo "✓ 现代化应用验证通过"
+        echo "✓ 现代化应用验证通过 - 包含登录功能"
         APP_MODULE="standalone_app_v2:app"
     else
         echo "✗ 现代化应用加载失败，尝试原始应用..."
         if python -c "from app.main import app; print('✓ 原始应用加载成功')" 2>/dev/null; then
-            echo "✓ 原始应用验证通过"
+            echo "✓ 原始应用验证通过 - 包含登录功能"
             APP_MODULE="app.main:app"
         else
-            echo "✗ 原始应用也加载失败，使用简化应用..."
-            APP_MODULE="app.main_simple:app"
+            echo "✗ 原始应用也加载失败，使用部署版本..."
+            if python -c "from app.main_deploy import app; print('✓ 部署版本应用加载成功')" 2>/dev/null; then
+                echo "✓ 部署版本应用验证通过 - 简化版本（无登录）"
+                APP_MODULE="app.main_deploy:app"
+            else
+                echo "✗ 所有版本都失败，使用最后备用..."
+                APP_MODULE="app.main_simple:app"
+            fi
         fi
     fi
 else
-    echo "尝试原始应用..."
+    echo "现代化应用文件不存在，尝试原始应用..."
     if python -c "from app.main import app; print('✓ 原始应用加载成功')" 2>/dev/null; then
-        echo "✓ 原始应用验证通过"
+        echo "✓ 原始应用验证通过 - 包含登录功能"
         APP_MODULE="app.main:app"
     else
-        echo "✗ 原始应用加载失败，使用简化应用..."
-        APP_MODULE="app.main_simple:app"
+        echo "✗ 原始应用加载失败，使用部署版本..."
+        if python -c "from app.main_deploy import app; print('✓ 部署版本应用加载成功')" 2>/dev/null; then
+            echo "✓ 部署版本应用验证通过 - 简化版本（无登录）"
+            APP_MODULE="app.main_deploy:app"
+        else
+            echo "✗ 所有版本都失败，使用最后备用..."
+            APP_MODULE="app.main_simple:app"
+        fi
     fi
 fi
 
