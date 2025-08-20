@@ -11,6 +11,9 @@
 - **Docker 支持**: 提供完整的 Docker 镜像和编排文件
 - **健康检查**: 内置服务健康检查接口
 - **API 文档**: 自动生成的 Swagger/OpenAPI 文档
+- **🔐 登录认证**: 账号密码 + 验证码登录保护
+- **🛡️ 安全防护**: JWT令牌认证，会话管理
+- **🔧 容器稳定性**: 优化的Docker配置，自动重启和健康检查
 
 ## 📋 API 接口
 
@@ -126,8 +129,16 @@ curl -X POST "http://localhost:12345/wake/advanced" \
 
 ### 环境变量
 
+#### 基础配置
 - `HOST`: 服务监听地址 (默认: 0.0.0.0)
 - `PORT`: 服务监听端口 (默认: 12345)
+
+#### 🔐 认证配置
+- `WOL_USERNAME`: 登录用户名 (默认: admin)
+- `WOL_PASSWORD`: 登录密码 (默认: admin123)
+- `WOL_SESSION_SECRET`: 会话密钥 (默认: your-secret-key-change-this)
+
+⚠️ **安全提醒**: 生产环境请务必修改默认的用户名、密码和会话密钥！
 
 ### Docker 网络模式
 
@@ -177,12 +188,153 @@ docker run --rm kkape/wake-on-lan-service:latest python -c "import platform; pri
 - 内置健康检查
 - 优化的镜像大小
 
+## 🔐 登录认证
+
+### 认证功能
+- **登录界面**: 访问根路径 `/` 时，未认证用户将看到登录界面
+- **验证码保护**: 每次登录都需要输入图形验证码，防止暴力破解
+- **JWT令牌**: 登录成功后使用JWT令牌进行身份验证
+- **会话管理**: 自动清理过期的会话和验证码
+- **Cookie认证**: 支持Cookie和Authorization头两种认证方式
+
+### 使用方法
+1. 浏览器访问 `http://localhost:12345`
+2. 输入配置的用户名和密码
+3. 输入验证码（点击图片可刷新）
+4. 登录成功后即可使用所有功能
+
+### API认证
+所有功能性API端点都需要认证：
+- `GET /interfaces` - 需要认证
+- `POST /wake` - 需要认证
+- `POST /wake/advanced` - 需要认证
+
+公开端点（无需认证）：
+- `GET /health` - 健康检查
+- `GET /docs` - API文档
+- `POST /api/login` - 登录接口
+- `GET /api/captcha` - 获取验证码
+
 ## 🔒 安全注意事项
 
+### 网络安全
 1. **网络访问**: 服务需要访问主机网络接口，请确保在受信任的网络环境中运行
 2. **防火墙**: 确保目标设备的防火墙允许 WOL 包 (通常是 UDP 端口 9)
-3. **BIOS 设置**: 目标设备需要在 BIOS/UEFI 中启用 Wake-on-LAN 功能
-4. **网卡支持**: 目标设备的网卡需要支持 Wake-on-LAN 功能
+3. **访问控制**: 建议通过防火墙限制服务访问来源
+
+### 设备要求
+1. **BIOS 设置**: 目标设备需要在 BIOS/UEFI 中启用 Wake-on-LAN 功能
+2. **网卡支持**: 目标设备的网卡需要支持 Wake-on-LAN 功能
+3. **电源管理**: 确保设备在关机状态下网卡仍有供电
+
+### 认证安全
+1. **强密码**: 使用复杂的用户名和密码
+2. **会话密钥**: 生产环境必须修改 `WOL_SESSION_SECRET`
+3. **HTTPS**: 生产环境建议使用HTTPS（可通过反向代理实现）
+4. **访问日志**: 定期检查访问日志，监控异常登录
+
+## 🧪 测试
+
+### 自动化测试
+
+项目提供了两个测试脚本来验证功能：
+
+#### Docker容器稳定性测试
+```bash
+python test_docker.py
+```
+测试内容：
+- Docker环境检查
+- 镜像构建和容器启动
+- 服务健康检查
+- 容器重启测试
+- 压力测试
+
+#### 认证功能测试
+```bash
+python test_auth.py
+```
+测试内容：
+- 验证码生成和验证
+- 登录认证流程
+- 受保护端点访问控制
+- Web界面重定向
+
+### 手动测试
+
+#### 基础功能测试
+```bash
+# 健康检查
+curl http://localhost:12345/health
+
+# 获取验证码
+curl http://localhost:12345/api/captcha
+
+# 登录（需要先获取验证码）
+curl -X POST http://localhost:12345/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123","captcha_id":"xxx","captcha_text":"1234"}'
+```
+
+#### Web界面测试
+1. 浏览器访问 `http://localhost:12345`
+2. 验证登录界面显示
+3. 测试登录功能
+4. 验证主界面功能
+
+## 🔧 故障排除
+
+### 常见问题
+
+#### 1. 容器启动失败
+```bash
+# 检查容器日志
+docker logs wake-on-lan-service
+
+# 检查端口占用
+netstat -tuln | grep 12345
+
+# 检查Docker权限
+docker info
+```
+
+#### 2. 登录失败
+- 检查环境变量配置
+- 验证用户名密码是否正确
+- 确认验证码输入正确
+- 检查浏览器Cookie设置
+
+#### 3. 网络接口访问失败
+```bash
+# 检查容器权限
+docker inspect wake-on-lan-service | grep -A 10 "CapAdd"
+
+# 检查网络模式
+docker inspect wake-on-lan-service | grep -A 5 "NetworkMode"
+```
+
+#### 4. Wake-on-LAN功能失败
+- 确认目标设备支持WOL
+- 检查网络接口和广播地址
+- 验证MAC地址格式
+- 确认目标设备网络配置
+
+### 日志分析
+
+#### 应用日志
+```bash
+# 查看实时日志
+docker logs -f wake-on-lan-service
+
+# 查看最近日志
+docker logs --tail 50 wake-on-lan-service
+```
+
+#### 健康检查日志
+```bash
+# 检查健康状态
+docker inspect wake-on-lan-service | grep -A 10 "Health"
+```
 
 ## 🛠️ 开发
 

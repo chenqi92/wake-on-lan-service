@@ -22,20 +22,22 @@ COPY requirements.txt .
 # 安装Python依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制应用代码
+# 复制应用代码和启动脚本
 COPY app/ ./app/
+COPY entrypoint.sh ./entrypoint.sh
 
-# 创建非root用户
+# 创建非root用户并设置权限
 RUN useradd --create-home --shell /bin/bash app && \
-    chown -R app:app /app
+    chown -R app:app /app && \
+    chmod +x /app/entrypoint.sh
 USER app
 
 # 暴露端口
 EXPOSE 12345
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:12345/health')" || exit 1
+# 健康检查 - 使用更可靠的方式
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:12345/health', timeout=5)" || exit 1
 
-# 启动命令
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "12345"]
+# 启动命令 - 使用更健壮的启动脚本
+CMD ["./entrypoint.sh"]

@@ -60,3 +60,32 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="服务状态")
     version: str = Field(..., description="服务版本")
     uptime: str = Field(..., description="运行时间")
+
+
+# 认证相关模型
+class LoginRequest(BaseModel):
+    """登录请求模型"""
+    username: str = Field(..., description="用户名")
+    password: str = Field(..., description="密码")
+    captcha_id: str = Field(..., description="验证码ID")
+    captcha_text: str = Field(..., description="验证码文本")
+
+
+class LoginResponse(BaseModel):
+    """登录响应模型"""
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="响应消息")
+    access_token: Optional[str] = Field(None, description="访问令牌")
+    token_type: str = Field("bearer", description="令牌类型")
+
+
+class CaptchaResponse(BaseModel):
+    """验证码响应模型"""
+    captcha_id: str = Field(..., description="验证码ID")
+    captcha_image: str = Field(..., description="验证码图片（base64编码）")
+
+
+class UserInfo(BaseModel):
+    """用户信息模型"""
+    username: str = Field(..., description="用户名")
+    is_authenticated: bool = Field(..., description="是否已认证")

@@ -4,19 +4,25 @@ services:
   wake-on-lan:
     build: .
     container_name: wake-on-lan-service
-    ports:
-      - "12345:12345"
     environment:
       - HOST=0.0.0.0
       - PORT=12345
+      # 登录认证配置
+      - WOL_USERNAME=${WOL_USERNAME:-admin}
+      - WOL_PASSWORD=${WOL_PASSWORD:-admin123}
+      - WOL_SESSION_SECRET=${WOL_SESSION_SECRET:-your-secret-key-change-this}
     network_mode: host  # 使用主机网络模式以访问本地网络接口
     restart: unless-stopped
+    # 添加必要的权限以访问网络接口
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:12345/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:12345/health', timeout=5)"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 60s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wake-on-lan.rule=Host(`wake-on-lan.local`)"
