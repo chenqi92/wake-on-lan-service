@@ -27,34 +27,35 @@ from app.auth import (
 # 应用启动时间
 start_time = time.time()
 
+# 暂时移除lifespan功能以避免启动问题
 # 定期清理任务
-import asyncio
-from contextlib import asynccontextmanager
+# import asyncio
+# from contextlib import asynccontextmanager
 
-@asynccontextmanager
-async def lifespan(app):
-    # 启动时的清理任务
-    cleanup_task = asyncio.create_task(periodic_cleanup())
-    yield
-    # 关闭时取消任务
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
+# @asynccontextmanager
+# async def lifespan(app):
+#     # 启动时的清理任务
+#     cleanup_task = asyncio.create_task(periodic_cleanup())
+#     yield
+#     # 关闭时取消任务
+#     cleanup_task.cancel()
+#     try:
+#         await cleanup_task
+#     except asyncio.CancelledError:
+#         pass
 
-async def periodic_cleanup():
-    """定期清理过期的验证码和会话"""
-    while True:
-        try:
-            cleanup_expired_captchas()
-            cleanup_expired_sessions()
-            await asyncio.sleep(300)  # 每5分钟清理一次
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"清理任务出错: {e}")
-            await asyncio.sleep(60)  # 出错后等待1分钟再试
+# async def periodic_cleanup():
+#     """定期清理过期的验证码和会话"""
+#     while True:
+#         try:
+#             cleanup_expired_captchas()
+#             cleanup_expired_sessions()
+#             await asyncio.sleep(300)  # 每5分钟清理一次
+#         except asyncio.CancelledError:
+#             break
+#         except Exception as e:
+#             print(f"清理任务出错: {e}")
+#             await asyncio.sleep(60)  # 出错后等待1分钟再试
 
 # 读取版本号
 def get_version():
@@ -74,7 +75,7 @@ app = FastAPI(
     description="内网设备唤醒服务 - 支持通过MAC地址唤醒网络设备",
     version=APP_VERSION,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
     # 暂时禁用lifespan以便调试
     # lifespan=lifespan
 )
@@ -102,29 +103,77 @@ except Exception as e:
 @app.get("/", response_class=HTMLResponse, summary="Web界面", description="Wake-on-LAN Web管理界面")
 async def web_interface(request: Request):
     """Web管理界面 - 检查认证状态"""
-    # 检查是否已登录
-    token = request.cookies.get("access_token")
-    if token:
-        from app.auth import verify_token
-        user_data = verify_token(token)
-        if user_data:
-            # 已登录，显示主界面
-            return await main_interface()
+    try:
+        # 检查是否已登录
+        token = request.cookies.get("access_token")
+        if token:
+            try:
+                from app.auth import verify_token
+                user_data = verify_token(token)
+                if user_data:
+                    # 已登录，显示主界面
+                    return await main_interface()
+            except Exception as e:
+                print(f"Token验证失败: {e}")
 
-    # 未登录，显示登录界面
-    return await login_interface()
+        # 未登录，显示登录界面
+        return await login_interface()
+    except Exception as e:
+        # 如果出现任何错误，返回简单的错误页面
+        return f"""
+        <html>
+        <head><title>Wake-on-LAN Service</title></head>
+        <body>
+            <h1>Wake-on-LAN Service</h1>
+            <p>服务正在运行，但遇到了一些问题。</p>
+            <p>错误: {str(e)}</p>
+            <p><a href="/health">健康检查</a> | <a href="/docs">API文档</a></p>
+        </body>
+        </html>
+        """
 
 
 async def login_interface():
     """登录界面"""
-    from app.templates import get_login_template
-    return get_login_template(APP_VERSION)
+    try:
+        from app.templates import get_login_template
+        return get_login_template(APP_VERSION)
+    except Exception as e:
+        # 简单的登录页面
+        return f"""
+        <html>
+        <head><title>Wake-on-LAN 登录</title></head>
+        <body>
+            <h1>Wake-on-LAN 登录</h1>
+            <p>模板加载失败: {str(e)}</p>
+            <form method="post" action="/api/login">
+                <p>用户名: <input type="text" name="username" value="admin"></p>
+                <p>密码: <input type="password" name="password"></p>
+                <p><button type="submit">登录</button></p>
+            </form>
+        </body>
+        </html>
+        """
 
 
 async def main_interface():
     """主界面"""
-    from app.templates import get_main_template
-    return get_main_template(APP_VERSION)
+    try:
+        from app.templates import get_main_template
+        return get_main_template(APP_VERSION)
+    except Exception as e:
+        # 简单的主界面
+        return f"""
+        <html>
+        <head><title>Wake-on-LAN 管理</title></head>
+        <body>
+            <h1>Wake-on-LAN 管理界面</h1>
+            <p>模板加载失败: {str(e)}</p>
+            <p>服务正在运行中...</p>
+            <p><a href="/health">健康检查</a> | <a href="/docs">API文档</a> | <a href="/interfaces">网络接口</a></p>
+        </body>
+        </html>
+        """
 
 
 # 认证相关API端点

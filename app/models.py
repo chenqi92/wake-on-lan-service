@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from typing import Optional, List
 import re
 
@@ -111,20 +111,6 @@ class AddIPRequest(BaseModel):
     """添加IP请求模型"""
     ip: str = Field(..., description="IP地址或CIDR网段")
     description: Optional[str] = Field(None, description="描述")
-
-    @validator('ip')
-    def validate_ip(cls, v):
-        import ipaddress
-        try:
-            if '/' in v:
-                # CIDR网段
-                ipaddress.ip_network(v, strict=False)
-            else:
-                # 单个IP
-                ipaddress.ip_address(v)
-            return v
-        except ValueError:
-            raise ValueError('无效的IP地址或CIDR网段格式')
 
 
 class RemoveIPRequest(BaseModel):
