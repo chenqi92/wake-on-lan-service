@@ -28,7 +28,7 @@ import asyncio
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app):
     # 启动时的清理任务
     cleanup_task = asyncio.create_task(periodic_cleanup())
     yield
@@ -70,8 +70,9 @@ app = FastAPI(
     description="内网设备唤醒服务 - 支持通过MAC地址唤醒网络设备",
     version=APP_VERSION,
     docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan
+    redoc_url="/redoc"
+    # 暂时禁用lifespan以便调试
+    # lifespan=lifespan
 )
 
 # 添加CORS中间件
@@ -84,7 +85,14 @@ app.add_middleware(
 )
 
 # 挂载静态文件
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+try:
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+except Exception as e:
+    print(f"警告: 静态文件目录挂载失败: {e}")
+    # 创建静态文件目录
+    import os
+    os.makedirs("app/static", exist_ok=True)
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.get("/", response_class=HTMLResponse, summary="Web界面", description="Wake-on-LAN Web管理界面")
