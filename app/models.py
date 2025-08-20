@@ -15,14 +15,16 @@ class NetworkInterface(BaseModel):
 class WakeRequest(BaseModel):
     """基础唤醒请求模型"""
     mac_address: str = Field(..., description="目标设备MAC地址")
-    
-    @validator('mac_address')
-    def validate_mac_address(cls, v):
+
+    def validate_mac_address(self):
+        """验证MAC地址格式"""
+        v = self.mac_address
         # 移除常见的分隔符并转换为标准格式
         mac = re.sub(r'[:-]', '', v.upper())
         if not re.match(r'^[0-9A-F]{12}$', mac):
             raise ValueError('MAC地址格式无效，应为 XX:XX:XX:XX:XX:XX 或 XX-XX-XX-XX-XX-XX 格式')
-        return ':'.join([mac[i:i+2] for i in range(0, 12, 2)])
+        self.mac_address = ':'.join([mac[i:i+2] for i in range(0, 12, 2)])
+        return self.mac_address
 
 
 class AdvancedWakeRequest(WakeRequest):
@@ -31,8 +33,9 @@ class AdvancedWakeRequest(WakeRequest):
     broadcast_address: Optional[str] = Field(None, description="指定广播地址")
     port: int = Field(9, description="WOL端口号，默认为9")
     
-    @validator('broadcast_address')
-    def validate_broadcast_address(cls, v):
+    def validate_broadcast_address(self):
+        """验证广播地址格式"""
+        v = self.broadcast_address
         if v is not None:
             # 简单的IP地址格式验证
             if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', v):

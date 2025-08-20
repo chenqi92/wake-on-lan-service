@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码和启动脚本
 COPY app/ ./app/
+COPY standalone_app_v2.py ./standalone_app_v2.py
 COPY entrypoint.sh ./entrypoint.sh
 
 # 创建非root用户并设置权限
