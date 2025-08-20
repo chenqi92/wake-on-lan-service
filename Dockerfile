@@ -27,6 +27,9 @@ COPY app/ ./app/
 COPY standalone_app_v2.py ./standalone_app_v2.py
 COPY entrypoint.sh ./entrypoint.sh
 
+# 创建必要的目录
+RUN mkdir -p /app/app/static
+
 # 创建非root用户并设置权限
 RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app && \
