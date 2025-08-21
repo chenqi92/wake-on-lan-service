@@ -15,8 +15,11 @@ import string
 import socket
 import struct
 import ipaddress
+import subprocess
+import platform
+import re
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from io import BytesIO
 
 # 设置环境变量
@@ -53,44 +56,124 @@ ip_whitelist = {'127.0.0.1', '::1'}  # 默认包含本地回环地址
 # 验证码存储 {session_id: {'code': 'ABCD', 'expires': datetime, 'attempts': 0}}
 captcha_store = {}
 
-# Wake-on-LAN功能
-def send_magic_packet(mac_address: str, broadcast_ip: str = '255.255.255.255', port: int = 9):
-    """发送魔术包唤醒设备"""
-    # 清理MAC地址格式
-    mac_address = mac_address.replace(':', '').replace('-', '').upper()
-    
-    # 验证MAC地址格式
-    if len(mac_address) != 12:
-        raise ValueError("无效的MAC地址格式")
-    
+# Wake-on-LAN功能 - 增强版本
+def send_magic_packet(mac_address: str, broadcast_ip: str = '255.255.255.255', port: int = 9, interface: str = None):
+    """发送魔术包唤醒设备 - 增强版本"""
+    debug_info = []
+
     try:
-        # 将MAC地址转换为字节
-        mac_bytes = bytes.fromhex(mac_address)
-    except ValueError:
-        raise ValueError("无效的MAC地址格式")
-    
-    # 构造魔术包：6个0xFF + 16次重复的MAC地址
-    magic_packet = b'\xff' * 6 + mac_bytes * 16
-    
-    # 发送UDP包
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    
-    try:
-        sock.sendto(magic_packet, (broadcast_ip, port))
-        return True
+        # 1. 清理和验证MAC地址格式
+        original_mac = mac_address
+        mac_address = mac_address.replace(':', '').replace('-', '').replace(' ', '').upper()
+        debug_info.append(f"原始MAC: {original_mac} -> 清理后: {mac_address}")
+
+        if len(mac_address) != 12:
+            raise ValueError(f"MAC地址长度错误: {len(mac_address)}, 应为12位")
+
+        if not all(c in '0123456789ABCDEF' for c in mac_address):
+            raise ValueError("MAC地址包含无效字符")
+
+        # 2. 将MAC地址转换为字节
+        try:
+            mac_bytes = bytes.fromhex(mac_address)
+            debug_info.append(f"MAC字节: {mac_bytes.hex().upper()}")
+        except ValueError as e:
+            raise ValueError(f"MAC地址转换失败: {e}")
+
+        # 3. 构造魔术包：6个0xFF + 16次重复的MAC地址
+        magic_packet = b'\xff' * 6 + mac_bytes * 16
+        debug_info.append(f"魔术包长度: {len(magic_packet)} 字节")
+        debug_info.append(f"魔术包前缀: {magic_packet[:6].hex().upper()}")
+        debug_info.append(f"MAC重复次数: 16")
+
+        # 4. 验证广播地址
+        try:
+            ipaddress.IPv4Address(broadcast_ip)
+            debug_info.append(f"广播地址: {broadcast_ip}")
+        except:
+            debug_info.append(f"警告: 广播地址格式可能有问题: {broadcast_ip}")
+
+        # 5. 创建UDP套接字
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+        # 6. 绑定到指定网络接口（如果指定）
+        if interface:
+            try:
+                # 获取接口IP地址
+                interface_ip = None
+                for name, addrs in psutil.net_if_addrs().items():
+                    if name == interface:
+                        for addr in addrs:
+                            if addr.family.name == 'AF_INET':
+                                interface_ip = addr.address
+                                break
+                        break
+
+                if interface_ip:
+                    sock.bind((interface_ip, 0))
+                    debug_info.append(f"绑定到接口: {interface} ({interface_ip})")
+                else:
+                    debug_info.append(f"警告: 未找到接口 {interface} 的IP地址")
+            except Exception as e:
+                debug_info.append(f"警告: 绑定接口失败: {e}")
+
+        # 7. 发送魔术包
+        try:
+            bytes_sent = sock.sendto(magic_packet, (broadcast_ip, port))
+            debug_info.append(f"发送成功: {bytes_sent} 字节到 {broadcast_ip}:{port}")
+
+            # 8. 尝试发送到多个端口（增加成功率）
+            additional_ports = [7, 9, 2304]  # 常用的WOL端口
+            for additional_port in additional_ports:
+                if additional_port != port:
+                    try:
+                        sock.sendto(magic_packet, (broadcast_ip, additional_port))
+                        debug_info.append(f"额外发送到端口: {additional_port}")
+                    except:
+                        pass
+
+            return True, debug_info
+
+        except Exception as e:
+            debug_info.append(f"发送失败: {str(e)}")
+            raise Exception(f"发送魔术包失败: {str(e)}")
+
     except Exception as e:
-        raise Exception(f"发送魔术包失败: {str(e)}")
+        debug_info.append(f"错误: {str(e)}")
+        raise Exception(f"魔术包发送失败: {str(e)}")
     finally:
-        sock.close()
+        try:
+            sock.close()
+            debug_info.append("套接字已关闭")
+        except:
+            pass
 
 def get_network_interfaces():
-    """获取网络接口信息"""
+    """获取网络接口信息 - 过滤Docker相关接口"""
     interfaces = []
-    
+
+    # Docker相关接口名称模式
+    docker_patterns = [
+        r'^docker\d*$',
+        r'^br-[a-f0-9]{12}$',
+        r'^veth[a-f0-9]+$',
+        r'^br-docker$',
+        r'^docker_gwbridge$'
+    ]
+
     for name, addrs in psutil.net_if_addrs().items():
+        # 过滤Docker相关接口
+        is_docker = any(re.match(pattern, name) for pattern in docker_patterns)
+        if is_docker:
+            continue
+
+        # 过滤回环接口（可选保留）
+        if name.startswith('lo'):
+            continue
+
         interface_info = {"name": name, "addresses": []}
-        
+
         for addr in addrs:
             if hasattr(addr, 'family') and addr.family.name in ['AF_INET', 'AF_INET6']:
                 interface_info["addresses"].append({
@@ -99,11 +182,151 @@ def get_network_interfaces():
                     "netmask": getattr(addr, 'netmask', None),
                     "broadcast": getattr(addr, 'broadcast', None)
                 })
-        
+
         if interface_info["addresses"]:
             interfaces.append(interface_info)
-    
+
     return interfaces
+
+def calculate_broadcast_address(ip: str, netmask: str) -> str:
+    """根据IP和子网掩码计算广播地址"""
+    try:
+        network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+        return str(network.broadcast_address)
+    except:
+        return "255.255.255.255"
+
+def get_arp_table() -> List[Dict[str, str]]:
+    """获取ARP表中的设备信息"""
+    devices = []
+
+    try:
+        if platform.system().lower() == 'windows':
+            # Windows ARP命令
+            result = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # 解析 "  192.168.1.100    aa-bb-cc-dd-ee-ff     dynamic"
+                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+([a-fA-F0-9-]{17})', line)
+                    if match:
+                        ip, mac = match.groups()
+                        mac = mac.replace('-', ':').upper()
+                        devices.append({"ip": ip, "mac": mac, "hostname": ""})
+        else:
+            # Linux/Unix ARP命令
+            result = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # 解析不同格式的ARP输出
+                    match = re.search(r'(\d+\.\d+\.\d+\.\d+).*?([a-fA-F0-9:]{17})', line)
+                    if match:
+                        ip, mac = match.groups()
+                        mac = mac.upper()
+                        devices.append({"ip": ip, "mac": mac, "hostname": ""})
+    except Exception as e:
+        print(f"获取ARP表失败: {e}")
+
+    return devices
+
+def ping_scan_network(network: str) -> List[Dict[str, str]]:
+    """Ping扫描网络段发现活跃设备"""
+    devices = []
+
+    try:
+        net = ipaddress.IPv4Network(network, strict=False)
+        # 限制扫描范围，避免扫描过大的网段
+        if net.num_addresses > 254:
+            return devices
+
+        for ip in net.hosts():
+            ip_str = str(ip)
+            try:
+                # 使用ping命令检测设备
+                if platform.system().lower() == 'windows':
+                    result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip_str],
+                                          capture_output=True, timeout=2)
+                else:
+                    result = subprocess.run(['ping', '-c', '1', '-W', '1', ip_str],
+                                          capture_output=True, timeout=2)
+
+                if result.returncode == 0:
+                    devices.append({"ip": ip_str, "mac": "", "hostname": ""})
+
+            except subprocess.TimeoutExpired:
+                continue
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"网络扫描失败: {e}")
+
+    return devices
+
+def discover_network_devices() -> List[Dict[str, str]]:
+    """发现网络设备 - 结合ARP表和ping扫描"""
+    print("开始发现网络设备...")
+
+    # 1. 从ARP表获取已知设备
+    arp_devices = get_arp_table()
+    print(f"从ARP表发现 {len(arp_devices)} 个设备")
+
+    # 2. 获取本机网络接口，进行ping扫描
+    interfaces = get_network_interfaces()
+    ping_devices = []
+
+    for interface in interfaces:
+        for addr in interface["addresses"]:
+            if addr["family"] == "AF_INET" and addr["netmask"]:
+                try:
+                    network = ipaddress.IPv4Network(f"{addr['address']}/{addr['netmask']}", strict=False)
+                    # 只扫描小网段
+                    if network.num_addresses <= 254:
+                        print(f"扫描网段: {network}")
+                        devices = ping_scan_network(str(network))
+                        ping_devices.extend(devices)
+                except Exception as e:
+                    print(f"扫描网段失败: {e}")
+
+    print(f"通过ping发现 {len(ping_devices)} 个设备")
+
+    # 3. 合并设备列表
+    device_dict = {}
+
+    # 添加ARP设备（有MAC地址）
+    for device in arp_devices:
+        key = device["ip"]
+        device_dict[key] = device
+
+    # 添加ping设备（可能没有MAC地址）
+    for device in ping_devices:
+        key = device["ip"]
+        if key not in device_dict:
+            device_dict[key] = device
+
+    # 尝试为ping设备获取MAC地址
+    for ip, device in device_dict.items():
+        if not device["mac"]:
+            # 再次查询ARP表
+            try:
+                if platform.system().lower() == 'windows':
+                    result = subprocess.run(['arp', '-a', ip], capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        match = re.search(r'([a-fA-F0-9-]{17})', result.stdout)
+                        if match:
+                            device["mac"] = match.group(1).replace('-', ':').upper()
+                else:
+                    result = subprocess.run(['arp', ip], capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        match = re.search(r'([a-fA-F0-9:]{17})', result.stdout)
+                        if match:
+                            device["mac"] = match.group(1).upper()
+            except Exception:
+                pass
+
+    devices_list = list(device_dict.values())
+    print(f"总共发现 {len(devices_list)} 个设备")
+
+    return devices_list
 
 def get_client_ip(request: Request) -> str:
     """获取客户端IP地址"""
@@ -897,18 +1120,31 @@ MAIN_PAGE = """<!DOCTYPE html>
                         <div class="card-body">
                             <div class="form-group">
                                 <label for="advancedMac">MAC地址:</label>
-                                <input type="text" id="advancedMac" placeholder="例: AA:BB:CC:DD:EE:FF"
-                                       pattern="^([0-9A-Fa-f]{{2}}[:-]){{5}}([0-9A-Fa-f]{{2}})$">
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="advancedMac" placeholder="例: AA:BB:CC:DD:EE:FF"
+                                           pattern="^([0-9A-Fa-f]{{2}}[:-]){{5}}([0-9A-Fa-f]{{2}})$" style="flex: 1;">
+                                    <select id="deviceSelect" onchange="selectDevice()" style="flex: 1;">
+                                        <option value="">选择已发现的设备</option>
+                                    </select>
+                                </div>
+                                <button class="btn btn-secondary btn-sm" onclick="discoverDevices()" style="margin-top: 5px;">
+                                    <span>🔍</span> 发现设备
+                                </button>
                             </div>
                             <div class="form-group">
                                 <label for="interface">网络接口:</label>
-                                <select id="interface">
+                                <select id="interface" onchange="updateBroadcastAddress()">
                                     <option value="">自动选择</option>
                                 </select>
                             </div>
                             <div class="form-group">
                                 <label for="broadcast">广播地址:</label>
-                                <input type="text" id="broadcast" placeholder="例: 192.168.1.255">
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="broadcast" placeholder="例: 192.168.1.255" style="flex: 1;">
+                                    <button class="btn btn-secondary btn-sm" onclick="autoFillBroadcast()">
+                                        <span>🎯</span> 自动填充
+                                    </button>
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label for="port">端口:</label>
@@ -1207,7 +1443,7 @@ MAIN_PAGE = """<!DOCTYPE html>
             }}
         }}
 
-        // 高级唤醒
+        // 高级唤醒 - 增强版本
         async function advancedWake() {{
             const mac = document.getElementById('advancedMac').value.trim();
             const interface = document.getElementById('interface').value;
@@ -1241,13 +1477,120 @@ MAIN_PAGE = """<!DOCTYPE html>
 
                 const data = await response.json();
                 if (response.ok && data.success) {{
-                    resultDiv.innerHTML = `<div class="result success"><strong>✅ 高级唤醒成功!</strong><br>${{data.message}}</div>`;
+                    let debugInfo = '';
+                    if (data.debug_info && data.debug_info.length > 0) {{
+                        debugInfo = '<details style="margin-top: 10px;"><summary>调试信息</summary><ul>';
+                        data.debug_info.forEach(info => {{
+                            debugInfo += `<li>${{info}}</li>`;
+                        }});
+                        debugInfo += '</ul></details>';
+                    }}
+                    resultDiv.innerHTML = `<div class="result success"><strong>✅ 高级唤醒成功!</strong><br>${{data.message}}${{debugInfo}}</div>`;
                 }} else {{
-                    resultDiv.innerHTML = `<div class="result error"><strong>❌ 高级唤醒失败</strong><br>${{data.message || '未知错误'}}</div>`;
+                    let debugInfo = '';
+                    if (data.debug_info && data.debug_info.length > 0) {{
+                        debugInfo = '<details style="margin-top: 10px;"><summary>调试信息</summary><ul>';
+                        data.debug_info.forEach(info => {{
+                            debugInfo += `<li>${{info}}</li>`;
+                        }});
+                        debugInfo += '</ul></details>';
+                    }}
+                    resultDiv.innerHTML = `<div class="result error"><strong>❌ 高级唤醒失败</strong><br>${{data.message || '未知错误'}}${{debugInfo}}</div>`;
                 }}
             }} catch (error) {{
                 resultDiv.innerHTML = `<div class="result error"><strong>❌ 请求失败</strong><br>${{error.message}}</div>`;
             }}
+        }}
+
+        // 发现网络设备
+        async function discoverDevices() {{
+            const deviceSelect = document.getElementById('deviceSelect');
+            const button = event.target;
+
+            button.disabled = true;
+            button.innerHTML = '<span>🔍</span> 发现中...';
+
+            try {{
+                const response = await fetch('/discover/devices');
+                const data = await response.json();
+
+                if (data.success && data.devices) {{
+                    deviceSelect.innerHTML = '<option value="">选择已发现的设备</option>';
+
+                    data.devices.forEach(device => {{
+                        const displayText = device.mac ?
+                            `${{device.ip}} - ${{device.mac}}` :
+                            `${{device.ip}} - (无MAC地址)`;
+                        const option = document.createElement('option');
+                        option.value = JSON.stringify(device);
+                        option.textContent = displayText;
+                        deviceSelect.appendChild(option);
+                    }});
+
+                    // 显示发现结果
+                    const resultDiv = document.getElementById('advancedResult');
+                    resultDiv.innerHTML = `<div class="result success">✅ 发现 ${{data.count}} 个设备</div>`;
+                }} else {{
+                    const resultDiv = document.getElementById('advancedResult');
+                    resultDiv.innerHTML = `<div class="result error">❌ 设备发现失败: ${{data.message || '未知错误'}}</div>`;
+                }}
+            }} catch (error) {{
+                const resultDiv = document.getElementById('advancedResult');
+                resultDiv.innerHTML = `<div class="result error">❌ 设备发现失败: ${{error.message}}</div>`;
+            }} finally {{
+                button.disabled = false;
+                button.innerHTML = '<span>🔍</span> 发现设备';
+            }}
+        }}
+
+        // 选择设备
+        function selectDevice() {{
+            const deviceSelect = document.getElementById('deviceSelect');
+            const macInput = document.getElementById('advancedMac');
+
+            if (deviceSelect.value) {{
+                try {{
+                    const device = JSON.parse(deviceSelect.value);
+                    if (device.mac) {{
+                        macInput.value = device.mac;
+                    }}
+                }} catch (error) {{
+                    console.error('解析设备信息失败:', error);
+                }}
+            }}
+        }}
+
+        // 自动填充广播地址
+        async function autoFillBroadcast() {{
+            const interfaceSelect = document.getElementById('interface');
+            const broadcastInput = document.getElementById('broadcast');
+
+            if (!interfaceSelect.value) {{
+                alert('请先选择网络接口');
+                return;
+            }}
+
+            try {{
+                const response = await fetch(`/network/broadcast/${{interfaceSelect.value}}`);
+                const data = await response.json();
+
+                if (data.success) {{
+                    broadcastInput.value = data.broadcast;
+                    const resultDiv = document.getElementById('advancedResult');
+                    resultDiv.innerHTML = `<div class="result info">✅ 自动填充广播地址: ${{data.broadcast}}</div>`;
+                }} else {{
+                    alert(`获取广播地址失败: ${{data.message}}`);
+                }}
+            }} catch (error) {{
+                alert(`获取广播地址失败: ${{error.message}}`);
+            }}
+        }}
+
+        // 更新广播地址（当接口改变时）
+        function updateBroadcastAddress() {{
+            // 可以选择自动更新或提示用户
+            const resultDiv = document.getElementById('advancedResult');
+            resultDiv.innerHTML = '<div class="result info">💡 提示: 可以点击"自动填充"按钮获取该接口的广播地址</div>';
         }}
 
         // 验证MAC地址格式
@@ -1540,11 +1883,12 @@ async def wake_device(request: Request, wake_data: dict):
         raise HTTPException(status_code=400, detail="缺少MAC地址")
 
     try:
-        send_magic_packet(mac_address)
+        success, debug_info = send_magic_packet(mac_address)
         return {
             "success": True,
             "message": f"成功向 {mac_address} 发送唤醒包",
-            "mac_address": mac_address
+            "mac_address": mac_address,
+            "debug_info": debug_info
         }
     except Exception as e:
         return {
@@ -1555,7 +1899,7 @@ async def wake_device(request: Request, wake_data: dict):
 
 @app.post("/wake/advanced")
 async def wake_device_advanced(request: Request, wake_data: dict):
-    """高级设备唤醒"""
+    """高级设备唤醒 - 增强版本"""
     session_id = request.cookies.get("session_id")
     client_ip = get_client_ip(request)
 
@@ -1572,20 +1916,82 @@ async def wake_device_advanced(request: Request, wake_data: dict):
         raise HTTPException(status_code=400, detail="缺少MAC地址")
 
     try:
-        send_magic_packet(mac_address, broadcast_ip, port)
+        success, debug_info = send_magic_packet(mac_address, broadcast_ip, port, interface)
         return {
             "success": True,
             "message": f"成功向 {mac_address} 发送高级唤醒包",
             "mac_address": mac_address,
             "broadcast_ip": broadcast_ip,
             "port": port,
-            "interface": interface
+            "interface": interface,
+            "debug_info": debug_info
         }
     except Exception as e:
         return {
             "success": False,
             "message": str(e),
-            "mac_address": mac_address
+            "mac_address": mac_address,
+            "debug_info": getattr(e, 'debug_info', [])
+        }
+
+@app.get("/discover/devices")
+async def discover_devices(request: Request):
+    """发现网络设备"""
+    session_id = request.cookies.get("session_id")
+    client_ip = get_client_ip(request)
+
+    # 检查认证：会话或白名单
+    if not verify_session(session_id) and not is_ip_in_whitelist(client_ip):
+        raise HTTPException(status_code=401, detail="需要登录")
+
+    try:
+        devices = discover_network_devices()
+        return {
+            "success": True,
+            "devices": devices,
+            "count": len(devices)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "devices": [],
+            "count": 0
+        }
+
+@app.get("/network/broadcast/{interface_name}")
+async def get_broadcast_address(interface_name: str, request: Request):
+    """获取指定网络接口的广播地址"""
+    session_id = request.cookies.get("session_id")
+    client_ip = get_client_ip(request)
+
+    # 检查认证：会话或白名单
+    if not verify_session(session_id) and not is_ip_in_whitelist(client_ip):
+        raise HTTPException(status_code=401, detail="需要登录")
+
+    try:
+        interfaces = get_network_interfaces()
+        for interface in interfaces:
+            if interface["name"] == interface_name:
+                for addr in interface["addresses"]:
+                    if addr["family"] == "AF_INET" and addr["netmask"]:
+                        broadcast = calculate_broadcast_address(addr["address"], addr["netmask"])
+                        return {
+                            "success": True,
+                            "interface": interface_name,
+                            "ip": addr["address"],
+                            "netmask": addr["netmask"],
+                            "broadcast": broadcast
+                        }
+
+        return {
+            "success": False,
+            "message": f"未找到接口 {interface_name} 或无有效IP地址"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
         }
 
 # IP白名单管理API
